@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 
-from .reconstruct import reconstruct_to_glb_from_uploads
+from .reconstruct import reconstruct_to_glb_from_uploads, reconstruct_from_video
 
 
 model: VGGT | None = None
@@ -130,6 +130,33 @@ async def reconstruct_endpoint(
 
     # Let the OS clean temp dirs after process exit; if you want more aggressive cleanup,
     # you can schedule a background task to delete glb_path.parent
+    return FileResponse(
+        path=str(glb_path),
+        media_type="model/gltf-binary",
+        filename="reconstruction.glb",
+    )
+
+@app.post("/reconstruct_video")
+async def reconstruct_video_endpoint(
+    video: UploadFile = File(...),
+    conf_thres: float = Query(50.0),
+    max_frames: int = Query(200),
+    sample_rate: int = Query(1, description="Use every Nth frame"),
+):
+    """
+    Accept a single video upload and return a GLB point cloud reconstruction.
+    """
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not initialized")
+
+    glb_path = reconstruct_from_video(
+        video=video,
+        model=model,
+        conf_thres=conf_thres,
+        max_frames=max_frames,
+        sample_rate=sample_rate,
+    )
+
     return FileResponse(
         path=str(glb_path),
         media_type="model/gltf-binary",

@@ -15,6 +15,68 @@ from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
 from vggt.utils.geometry import unproject_depth_map_to_point_map
 
+import cv2
+import numpy as np
+from pathlib import Path
+from fastapi import HTTPException, UploadFile
+
+
+def extract_video_frames(
+    video_file: UploadFile,
+    output_dir: Path,
+    max_frames: int = 200,
+    sample_rate: int = 1,
+) -> list[Path]:
+    """
+    Extract frames from an uploaded video into PNG files.
+
+    Args:
+        video_file: UploadFile from FastAPI
+        output_dir: directory where extracted frames go
+        max_frames: safety limit so user cannot send a 5-min 4K video
+        sample_rate: keep 1 of every N frames
+
+    Returns:
+        A list of frame paths on disk.
+    """
+    video_path = output_dir / "input_video.mp4"
+    video_path.write_bytes(video_file.file.read())
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        raise HTTPException(status_code=400, detail="Cannot open uploaded video")
+
+    frame_paths = []
+    idx = 0
+    used = 0
+
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+
+        if idx % sample_rate == 0:
+            frame_bgr = frame
+            frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+            # save as png
+            out = output_dir / f"frame_{used:05d}.png"
+            cv2.imwrite(str(out), frame_rgb)
+            frame_paths.append(out)
+
+            used += 1
+            if used >= max_frames:
+                break
+
+        idx += 1
+
+    cap.release()
+
+    if not frame_paths:
+        raise HTTPException(status_code=400, detail="No frames extracted")
+
+    return frame_paths
+
 
 def run_vggt_on_dir(target_dir: Path, model: VGGT) -> dict[str, Any]:
     """
@@ -160,3 +222,43 @@ def reconstruct_to_glb_from_uploads(
         import traceback
         traceback.print_exception(exc)
         raise HTTPException(status_code=500, detail=f"Reconstruction failed: {exc}") from exc
+
+def reconstruct_from_video(
+    video: UploadFile,
+    model: VGGT,
+    conf_thres: float,
+    max_frames: int = 200,
+    sample_rate: int = 1,
+) -> Path:
+    """
+    Extracts frames from a video, runs VGGT, builds a GLB file, and returns
+    the path to the GLB.
+    """
+    temp_root = Path(tempfile.mkdtemp(prefix="vggt_video_"))
+    frames_dir = temp_root / "images"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # Step 1: extract frames
+        frame_paths = extract_video_frames(
+            video_file=video,
+            output_dir=frames_dir,
+            max_frames=max_frames,
+            sample_rate=sample_rate,
+        )
+
+        # Step 2: run VGGT — reuse your existing helper
+        predictions = run_vggt_on_dir(temp_root, model)
+
+        # Step 3: minimal GLB generation
+        scene = predictions_to_glb_minimal(predictions, conf_thres=conf_thres)
+
+        # Step 4: export
+        glb_path = temp_root / "reconstruction.glb"
+        scene.export(glb_path)
+        return glb_path
+
+    except Exception as exc:
+        shutil.rmtree(temp_root, ignore_errors=True)
+        raise HTTPException(status_code=500, detail=f"Video reconstruction failed: {exc}") from exc
+
