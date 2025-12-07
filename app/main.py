@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 
-from reconstruct import reconstruct_to_glb_from_uploads
+from .reconstruct import reconstruct_to_glb_from_uploads
 
 
 model: VGGT | None = None
