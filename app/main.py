@@ -59,6 +59,10 @@ def health() -> dict[str, str]:
         raise HTTPException(status_code=503, detail="Model not initialized")
     return {"status": "ok"}
 
+@app.get("/ping")
+def ping() -> dict[str, str]:
+    return {"status": "healthy"}
+
 
 @app.post("/predict", response_model=PredictionSummary)
 async def predict(files: list[UploadFile] = File(...)) -> PredictionSummary:
