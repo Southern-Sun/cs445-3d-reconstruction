@@ -4,11 +4,14 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import torch
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
+
+from reconstruct import reconstruct_to_glb_from_uploads
 
 
 model: VGGT | None = None
@@ -110,4 +113,25 @@ async def predict(files: list[UploadFile] = File(...)) -> PredictionSummary:
         has_cameras=bool(has_cameras),
         has_depths=bool(has_depths),
         has_point_maps=bool(has_point_maps),
+    )
+
+@app.post("/reconstruct")
+async def reconstruct_endpoint(
+    files: list[UploadFile] = File(...),
+    confidence_threshhold: float = Query(50.0, description="Percentile of low-confidence points to drop"),
+) -> FileResponse:
+    """
+    Upload images + confidence threshold, get a GLB point cloud back.
+    """
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not initialized")
+
+    glb_path = reconstruct_to_glb_from_uploads(files=files, model=model, confidence_threshhold=confidence_threshhold)
+
+    # Let the OS clean temp dirs after process exit; if you want more aggressive cleanup,
+    # you can schedule a background task to delete glb_path.parent
+    return FileResponse(
+        path=str(glb_path),
+        media_type="model/gltf-binary",
+        filename="reconstruction.glb",
     )
