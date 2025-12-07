@@ -39,7 +39,7 @@ def extract_video_frames(
     Returns:
         A list of frame paths on disk.
     """
-    video_path = output_dir / "input_video.mp4"
+    video_path = output_dir.parent / "input_video.mp4"
     video_path.write_bytes(video_file.file.read())
 
     cap = cv2.VideoCapture(str(video_path))
@@ -87,7 +87,11 @@ def run_vggt_on_dir(target_dir: Path, model: VGGT) -> dict[str, Any]:
     - extrinsic, intrinsic, world_points_from_depth
     """
     images_dir = target_dir / "images"
-    image_paths = sorted(p for p in images_dir.iterdir() if p.is_file())
+    image_paths = sorted(
+        p for p in images_dir.iterdir()
+        if p.is_file()
+        and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+    )
 
     if not image_paths:
         raise HTTPException(status_code=400, detail="No images found for reconstruction")
@@ -260,5 +264,7 @@ def reconstruct_from_video(
 
     except Exception as exc:
         shutil.rmtree(temp_root, ignore_errors=True)
+        import traceback
+        traceback.print_exception(exc)
         raise HTTPException(status_code=500, detail=f"Video reconstruction failed: {exc}") from exc
 
