@@ -9,6 +9,9 @@ Push:
 Run locally:
 `docker run --rm -p 8000:8000 -e PORT=8000 johnsmall407/vggt-api:latest`
 
+Tag:
+`docker tag johnsmall407/vggt-api:latest johnsmall407/vggt-api:v0.6`
+
 ## API Endpoint
 `GET /health`
 Simple health check that reports if the model is loaded
