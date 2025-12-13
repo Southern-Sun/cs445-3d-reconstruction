@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 import tempfile
 from pathlib import Path
 from typing import Any, AsyncGenerator
+import threading
 
 import torch
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query
@@ -13,10 +14,40 @@ from vggt.utils.load_fn import load_and_preprocess_images
 
 from .reconstruct import reconstruct_to_glb_from_uploads, reconstruct_from_video
 
-
+_model_lock = threading.Lock()
 model: VGGT | None = None
 device: str = "cpu"
 dtype: torch.dtype = torch.float32
+
+def get_model() -> VGGT:
+    """
+    Lazily initialize VGGT on first use.
+    Ensures only one thread does the heavy load.
+    """
+    global model, device, dtype
+
+    if model is not None:
+        return model
+
+    with _model_lock:
+        # Double-check inside lock
+        if model is not None:
+            return model
+
+        if torch.cuda.is_available():
+            device = "cuda"
+            major, _ = torch.cuda.get_device_capability()
+            dtype = torch.bfloat16 if major >= 8 else torch.float16
+        else:
+            device = "cpu"
+            dtype = torch.float32
+
+        loaded = VGGT.from_pretrained("facebook/VGGT-1B").to(device)
+        loaded.eval()
+        model = loaded
+        print("VGGT model loaded on", device)
+
+        return model
 
 
 class PredictionSummary(BaseModel):
@@ -26,35 +57,7 @@ class PredictionSummary(BaseModel):
     has_point_maps: bool
 
 
-def init_model() -> None:
-    """
-    Initialize VGGT and global device/dtype.
-    Called once at startup.
-    """
-    global model, device, dtype
-
-    if torch.cuda.is_available():
-        device = "cuda"
-        major, _ = torch.cuda.get_device_capability()
-        # per VGGT docs: bfloat16 for Ampere+ (cc >= 8.0), else float16
-        dtype = torch.bfloat16 if major >= 8 else torch.float16
-    else:
-        device = "cpu"
-        dtype = torch.float32
-
-    # This will download weights from HF the first time it runs.
-    # You can swap to model = VGGT() + manual load_state_dict if you prefer.
-    model = VGGT.from_pretrained("facebook/VGGT-1B").to(device)
-    model.eval()
-
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncGenerator[Any, Any]:
-    # On startup
-    init_model()
-    yield
-    # On shutdown
-
-app = FastAPI(title="VGGT API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="VGGT API", version="0.2.0")
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -123,10 +126,9 @@ async def reconstruct_endpoint(
     """
     Upload images + confidence threshold, get a GLB point cloud back.
     """
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not initialized")
+    vggt_model = get_model()
 
-    glb_path = reconstruct_to_glb_from_uploads(files=files, model=model, confidence_threshhold=confidence_threshhold)
+    glb_path = reconstruct_to_glb_from_uploads(files=files, model=vggt_model, confidence_threshhold=confidence_threshhold)
 
     # Let the OS clean temp dirs after process exit; if you want more aggressive cleanup,
     # you can schedule a background task to delete glb_path.parent
@@ -146,12 +148,11 @@ async def reconstruct_video_endpoint(
     """
     Accept a single video upload and return a GLB point cloud reconstruction.
     """
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not initialized")
+    vggt_model = get_model()
 
     glb_path = reconstruct_from_video(
         video=video,
-        model=model,
+        model=vggt_model,
         conf_thres=conf_thres,
         max_frames=max_frames,
         sample_rate=sample_rate,
