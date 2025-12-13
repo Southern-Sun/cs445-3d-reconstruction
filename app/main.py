@@ -19,6 +19,7 @@ model: VGGT | None = None
 device: str = "cpu"
 dtype: torch.dtype = torch.float32
 
+
 def get_model() -> VGGT:
     """
     Lazily initialize VGGT on first use. This protects against situations where runpod calls the
@@ -60,11 +61,13 @@ class PredictionSummary(BaseModel):
 
 app = FastAPI(title="VGGT API", version="0.2.0")
 
+
 @app.get("/health")
 def health() -> dict[str, str]:
     if model is None:
         raise HTTPException(status_code=503, detail="Model not initialized")
     return {"status": "ok"}
+
 
 @app.get("/ping")
 def ping() -> dict[str, str]:
@@ -112,15 +115,20 @@ async def predict(files: list[UploadFile] = File(...)) -> PredictionSummary:
         has_point_maps=bool("point_maps" in predictions),
     )
 
+
 @app.post("/reconstruct")
 async def reconstruct_endpoint(
     files: list[UploadFile] = File(...),
-    confidence_threshhold: float = Query(50.0, description="Percentile of low-confidence points to drop"),
+    confidence_threshhold: float = Query(
+        50.0, description="Percentile of low-confidence points to drop"
+    ),
 ) -> FileResponse:
     """Accepts images & confidence threshold and returns a GLB point cloud"""
     vggt_model = get_model()
 
-    glb_path = reconstruct_from_images(files=files, model=vggt_model, confidence_threshhold=confidence_threshhold)
+    glb_path = reconstruct_from_images(
+        files=files, model=vggt_model, confidence_threshhold=confidence_threshhold
+    )
 
     # Let the OS clean temp dirs after process exit; if you want more aggressive cleanup,
     # you can schedule a background task to delete glb_path.parent
@@ -129,6 +137,7 @@ async def reconstruct_endpoint(
         media_type="model/gltf-binary",
         filename="reconstruction.glb",
     )
+
 
 @app.post("/reconstruct_video")
 async def reconstruct_video_endpoint(

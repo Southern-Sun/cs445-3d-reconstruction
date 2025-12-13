@@ -1,4 +1,3 @@
-
 #### Built-ins ####
 from pathlib import Path
 from typing import Any
@@ -90,17 +89,24 @@ def run_vggt_on_dir(target_dir: Path, model: VGGT) -> dict[str, Any]:
     """
     images_dir = target_dir / "images"
     image_paths = sorted(
-        p for p in images_dir.iterdir()
+        p
+        for p in images_dir.iterdir()
         if p.is_file()
         and p.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
     )
 
     if not image_paths:
-        raise HTTPException(status_code=400, detail="No images found for reconstruction")
+        raise HTTPException(
+            status_code=400, detail="No images found for reconstruction"
+        )
 
     # Allow running on the CPU for local testing where we don't have CUDA available
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if (device == "cuda" and torch.cuda.get_device_capability()[0] >= 8) else torch.float16
+    dtype = (
+        torch.bfloat16
+        if (device == "cuda" and torch.cuda.get_device_capability()[0] >= 8)
+        else torch.float16
+    )
 
     images = load_and_preprocess_images([str(p) for p in image_paths]).to(device)
 
@@ -108,11 +114,17 @@ def run_vggt_on_dir(target_dir: Path, model: VGGT) -> dict[str, Any]:
     model.eval()
 
     with torch.no_grad():
-        with torch.cuda.amp.autocast(dtype=dtype) if device == "cuda" else torch.no_grad():
+        with (
+            torch.cuda.amp.autocast(dtype=dtype)
+            if device == "cuda"
+            else torch.no_grad()
+        ):
             predictions: dict[str, Any] = model(images)
 
     # convert pose encoding to extrinsic/intrinsic
-    extrinsic, intrinsic = pose_encoding_to_extri_intri(predictions["pose_enc"], images.shape[-2:])
+    extrinsic, intrinsic = pose_encoding_to_extri_intri(
+        predictions["pose_enc"], images.shape[-2:]
+    )
     extrinsic, intrinsic = extrinsic.squeeze(0), intrinsic.squeeze(0)
     predictions["extrinsic"] = extrinsic
     predictions["intrinsic"] = intrinsic
@@ -134,7 +146,9 @@ def run_vggt_on_dir(target_dir: Path, model: VGGT) -> dict[str, Any]:
     return predictions
 
 
-def predictions_to_glb(predictions: dict[str, Any], confidence_threshhold: float) -> trimesh.Scene:
+def predictions_to_glb(
+    predictions: dict[str, Any], confidence_threshhold: float
+) -> trimesh.Scene:
     """
     Converts VGGT predictions to a glb file for use in Unity:
     - chooses world_points or world_points_from_depth
@@ -217,7 +231,9 @@ def reconstruct_from_images(
                 f.write(upload.file.read())
 
         predictions = run_vggt_on_dir(temp_root, model)
-        scene = predictions_to_glb(predictions, confidence_threshhold=confidence_threshhold)
+        scene = predictions_to_glb(
+            predictions, confidence_threshhold=confidence_threshhold
+        )
 
         glb_path = temp_root / "reconstruction.glb"
         scene.export(glb_path)
@@ -227,8 +243,12 @@ def reconstruct_from_images(
         # cleanup and re-raise as HTTP error
         shutil.rmtree(temp_root, ignore_errors=True)
         import traceback
+
         traceback.print_exception(exc)
-        raise HTTPException(status_code=500, detail=f"Reconstruction failed: {exc}") from exc
+        raise HTTPException(
+            status_code=500, detail=f"Reconstruction failed: {exc}"
+        ) from exc
+
 
 def reconstruct_from_video(
     video: UploadFile,
@@ -268,6 +288,8 @@ def reconstruct_from_video(
     except Exception as exc:
         shutil.rmtree(temp_root, ignore_errors=True)
         import traceback
-        traceback.print_exception(exc)
-        raise HTTPException(status_code=500, detail=f"Video reconstruction failed: {exc}") from exc
 
+        traceback.print_exception(exc)
+        raise HTTPException(
+            status_code=500, detail=f"Video reconstruction failed: {exc}"
+        ) from exc
