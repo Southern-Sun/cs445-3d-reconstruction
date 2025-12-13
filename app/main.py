@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from vggt.models.vggt import VGGT
 from vggt.utils.load_fn import load_and_preprocess_images
 
-from .reconstruct import reconstruct_to_glb_from_uploads, reconstruct_from_video
+from .reconstruct import reconstruct_from_images, reconstruct_from_video
 
 _model_lock = threading.Lock()
 model: VGGT | None = None
@@ -21,7 +21,8 @@ dtype: torch.dtype = torch.float32
 
 def get_model() -> VGGT:
     """
-    Lazily initialize VGGT on first use.
+    Lazily initialize VGGT on first use. This protects against situations where runpod calls the
+    worker containers unhealthy due to the slow init time (e.g. where we use fastapi's lifespan)
     Ensures only one thread does the heavy load.
     """
     global model, device, dtype
@@ -30,7 +31,7 @@ def get_model() -> VGGT:
         return model
 
     with _model_lock:
-        # Double-check inside lock
+        # Double-check inside lock in case the thread was waiting on the lock & the model is loaded
         if model is not None:
             return model
 
@@ -73,10 +74,10 @@ def ping() -> dict[str, str]:
 @app.post("/predict", response_model=PredictionSummary)
 async def predict(files: list[UploadFile] = File(...)) -> PredictionSummary:
     """
-    Basic demo endpoint:
-    - Accepts multiple image files.
-    - Runs VGGT once on all of them.
-    - Returns a lightweight summary (no giant tensors in JSON).
+    POC endpoint:
+    - Accepts multiple image files
+    - Runs VGGT once on all of them
+    - Returns a lightweight summary
     """
     if model is None:
         raise HTTPException(status_code=503, detail="Model not initialized")
@@ -95,10 +96,8 @@ async def predict(files: list[UploadFile] = File(...)) -> PredictionSummary:
         if not image_paths:
             raise HTTPException(status_code=400, detail="No images provided")
 
-        # Load + preprocess via VGGT utilities
         images = load_and_preprocess_images(image_paths).to(device)
 
-        assert model is not None  # for type checkers
         with torch.no_grad():
             if device == "cuda":
                 with torch.cuda.amp.autocast(dtype=dtype):
@@ -106,16 +105,11 @@ async def predict(files: list[UploadFile] = File(...)) -> PredictionSummary:
             else:
                 predictions = model(images)
 
-    # Predictions is a dict-like with keys like "cameras", "depth_maps", etc.
-    has_cameras = "cameras" in predictions
-    has_depths = "depth_maps" in predictions
-    has_point_maps = "point_maps" in predictions
-
     return PredictionSummary(
         num_images=images.shape[1],
-        has_cameras=bool(has_cameras),
-        has_depths=bool(has_depths),
-        has_point_maps=bool(has_point_maps),
+        has_cameras=bool("cameras" in predictions),
+        has_depths=bool("depth_maps" in predictions),
+        has_point_maps=bool("point_maps" in predictions),
     )
 
 @app.post("/reconstruct")
@@ -123,12 +117,10 @@ async def reconstruct_endpoint(
     files: list[UploadFile] = File(...),
     confidence_threshhold: float = Query(50.0, description="Percentile of low-confidence points to drop"),
 ) -> FileResponse:
-    """
-    Upload images + confidence threshold, get a GLB point cloud back.
-    """
+    """Accepts images & confidence threshold and returns a GLB point cloud"""
     vggt_model = get_model()
 
-    glb_path = reconstruct_to_glb_from_uploads(files=files, model=vggt_model, confidence_threshhold=confidence_threshhold)
+    glb_path = reconstruct_from_images(files=files, model=vggt_model, confidence_threshhold=confidence_threshhold)
 
     # Let the OS clean temp dirs after process exit; if you want more aggressive cleanup,
     # you can schedule a background task to delete glb_path.parent
@@ -145,9 +137,7 @@ async def reconstruct_video_endpoint(
     max_frames: int = Query(200),
     sample_rate: int = Query(1, description="Use every Nth frame"),
 ):
-    """
-    Accept a single video upload and return a GLB point cloud reconstruction.
-    """
+    """Accepts a single video upload and return a GLB point cloud reconstruction"""
     vggt_model = get_model()
 
     glb_path = reconstruct_from_video(

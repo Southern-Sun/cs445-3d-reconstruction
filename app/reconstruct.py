@@ -1,26 +1,28 @@
+
+#### Built-ins ####
+from pathlib import Path
+from typing import Any
 import os
 import shutil
 import tempfile
-from pathlib import Path
-from typing import Any
 
+#### Third Party Libraries ####
+import cv2
 import numpy as np
 import torch
 import trimesh
 
+#### FastAPI ####
 from fastapi import HTTPException, UploadFile
 
+#### VGGT ####
 from vggt.models.vggt import VGGT
+from vggt.utils.geometry import unproject_depth_map_to_point_map
 from vggt.utils.load_fn import load_and_preprocess_images
 from vggt.utils.pose_enc import pose_encoding_to_extri_intri
-from vggt.utils.geometry import unproject_depth_map_to_point_map
-
-import cv2
-import numpy as np
-from pathlib import Path
-from fastapi import HTTPException, UploadFile
 
 
+#### Helpers ####
 def extract_video_frames(
     video_file: UploadFile,
     output_dir: Path,
@@ -80,7 +82,7 @@ def extract_video_frames(
 
 def run_vggt_on_dir(target_dir: Path, model: VGGT) -> dict[str, Any]:
     """
-    Mirror the Gradio demo's run_model(...) helper.
+    Mirror the Gradio demo's run_model() helper.
 
     Expects images under target_dir / "images".
     Returns a predictions dict with numpy arrays and extra fields:
@@ -96,6 +98,7 @@ def run_vggt_on_dir(target_dir: Path, model: VGGT) -> dict[str, Any]:
     if not image_paths:
         raise HTTPException(status_code=400, detail="No images found for reconstruction")
 
+    # Allow running on the CPU for local testing where we don't have CUDA available
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if (device == "cuda" and torch.cuda.get_device_capability()[0] >= 8) else torch.float16
 
@@ -115,11 +118,11 @@ def run_vggt_on_dir(target_dir: Path, model: VGGT) -> dict[str, Any]:
     predictions["intrinsic"] = intrinsic
 
     # world points from depth
-    depth_map = predictions["depth"].squeeze(0)  # (S, H, W, 1)
+    depth_map = predictions["depth"].squeeze(0)
     world_points = unproject_depth_map_to_point_map(depth_map, extrinsic, intrinsic)
     predictions["world_points_from_depth"] = world_points
 
-    # move tensors to cpu + numpy (and remove batch dim)
+    # move tensors to cpu + numpy
     for key, value in list(predictions.items()):
         if isinstance(value, torch.Tensor):
             value = value.detach().cpu().numpy()
@@ -131,12 +134,12 @@ def run_vggt_on_dir(target_dir: Path, model: VGGT) -> dict[str, Any]:
     return predictions
 
 
-def predictions_to_glb_minimal(predictions: dict[str, Any], confidence_threshhold: float) -> trimesh.Scene:
+def predictions_to_glb(predictions: dict[str, Any], confidence_threshhold: float) -> trimesh.Scene:
     """
-    Minimal version of Meta's predictions_to_glb:
+    Converts VGGT predictions to a glb file for use in Unity:
     - chooses world_points or world_points_from_depth
     - applies percentile confidence filtering
-    - builds a point-cloud-only GLB
+    - builds a point cloud GLB
     """
 
     if not isinstance(predictions, dict):
@@ -154,8 +157,7 @@ def predictions_to_glb_minimal(predictions: dict[str, Any], confidence_threshhol
     if conf is None:
         conf = np.ones(world_points.shape[:3], dtype=np.float32)
 
-    images = predictions["images"]  # (S, H, W, 3) or similar
-    # ensure NHWC
+    images = predictions["images"]
     if images.ndim == 4 and images.shape[1] == 3:
         # convert NCHW -> NHWC if needed
         images = np.transpose(images, (0, 2, 3, 1))
@@ -164,7 +166,7 @@ def predictions_to_glb_minimal(predictions: dict[str, Any], confidence_threshhol
     colors = (images.reshape(-1, 3) * 255).astype(np.uint8)
     conf_flat = conf.reshape(-1)
 
-    # percentile-based threshold, like the original helper
+    # percentile-based threshold
     confidence_threshhold = confidence_threshhold or 10.0
 
     if confidence_threshhold == 0.0:
@@ -177,7 +179,7 @@ def predictions_to_glb_minimal(predictions: dict[str, Any], confidence_threshhol
     colors = colors[mask]
 
     if vertices.size == 0:
-        # degenerate scene, avoid crashing trimesh
+        # protect against bad scenes
         vertices = np.array([[0.0, 0.0, 0.0]], dtype=np.float32)
         colors = np.array([[255, 255, 255]], dtype=np.uint8)
 
@@ -187,7 +189,8 @@ def predictions_to_glb_minimal(predictions: dict[str, Any], confidence_threshhol
     return scene
 
 
-def reconstruct_to_glb_from_uploads(
+#### Reconstruction Functions ####
+def reconstruct_from_images(
     files: list[UploadFile],
     model: VGGT,
     confidence_threshhold: float,
@@ -214,7 +217,7 @@ def reconstruct_to_glb_from_uploads(
                 f.write(upload.file.read())
 
         predictions = run_vggt_on_dir(temp_root, model)
-        scene = predictions_to_glb_minimal(predictions, confidence_threshhold=confidence_threshhold)
+        scene = predictions_to_glb(predictions, confidence_threshhold=confidence_threshhold)
 
         glb_path = temp_root / "reconstruction.glb"
         scene.export(glb_path)
@@ -255,7 +258,7 @@ def reconstruct_from_video(
         predictions = run_vggt_on_dir(temp_root, model)
 
         # Step 3: minimal GLB generation
-        scene = predictions_to_glb_minimal(predictions, conf_thres=conf_thres)
+        scene = predictions_to_glb(predictions, conf_thres=conf_thres)
 
         # Step 4: export
         glb_path = temp_root / "reconstruction.glb"
