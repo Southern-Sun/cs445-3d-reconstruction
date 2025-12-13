@@ -3,7 +3,7 @@
 FROM pytorch/pytorch:2.9.1-cuda12.6-cudnn9-runtime
 
 # System deps
-RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git libgl1 libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
