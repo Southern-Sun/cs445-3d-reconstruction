@@ -1,4 +1,16 @@
 # cs445-3d-reconstruction
+This repository contains the code necessary to process input videos into images, add masking, and
+submit them to a cloud-hosted VGGT API. It also contains the code for the containerized VGGT API.
+
+The API & wrapper code are contained within the `app/` directory. `main.py` contains the FastAPI
+wrapper for VGGT, and `reconstruct.py` contains helper methods for the API.
+
+The wrapper code is contained in `app/wrapper/`, with `vggt-cli.py` as the entrypoint. This argparse
+CLI utility calls methods from the API client (in `api_client.py`) which interfaces with the VGGT
+API in RunPod and the image processing functions (in `image_processor.py`) which modify input image
+files locally to provide transparency into inputs & outputs.
+
+The remaining directories contain image files and reconstructions. See CLI commands below.
 
 ## Docker
 Build:
