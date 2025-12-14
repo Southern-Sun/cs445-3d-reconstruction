@@ -54,8 +54,11 @@ class ImageProcessor:
             raise RuntimeError(f"Could not open video: {video_path}")
 
         native_fps = video.get(cv2.CAP_PROP_FPS) or 0.0
+        print(f"{native_fps=}")
         if native_fps <= 0.0:
             native_fps = 30.0
+
+        print(f"{native_fps=}")
 
         # How many images to extract per second of footage
         frame_interval = native_fps * seconds_per_frame
@@ -81,7 +84,8 @@ class ImageProcessor:
             ret, frame = video.read()
             if not ret:
                 break
-
+            
+            frame_idx += 1
             if (frame_idx - start_frame) % frame_interval != 0:
                 continue
 
@@ -91,8 +95,6 @@ class ImageProcessor:
             cv2.imwrite(str(out_path), frame_rgb)
             frames_written.append(out_path)
             saved_idx += 1
-
-            frame_idx += 1
 
         video.release()
         return frames_written
